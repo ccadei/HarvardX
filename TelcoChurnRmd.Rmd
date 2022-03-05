@@ -1,0 +1,530 @@
+---
+title: "TelcoChurn"
+author: "Carlo Cadei"
+date: '2022-03-01'
+output:
+     pdf_document:
+         latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+### Loading libraries
+
+```{r loading}
+#Loading libraries
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(gridExtra)) install.packages("gridExtra", repos = "http://cran.us.r-project.org")
+if(!require(plyr)) install.packages("plyr", repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+if(!require(rpart.plot)) install.packages("rpart.plot", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(gridExtra)
+library(plyr)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+if it does not create pdf: tinytex::install_tinytex()
+
+
+# TelcoChurn Report by Carlo Cadei
+
+
+### Introduction
+
+Our client is a telecommunication company, we work with a commercial retention team that needs to find the reasons why a good portion of customers leaves for competitors and has to suggest particular offers for small groups of clients to minimize the risk of churn. We will work on two data files provided by the company:
+
+* churn-customers.csv with customer personal details:
+
+  + customerID: internal ID
+ 
+  + genderCustomer: gender (female, male)
+ 
+  + SeniorCitizen: whether the customer is a senior citizen or not (1, 0)
+ 
+  + PartnerWhether: whether the customer has a partner or not (Yes, No)
+ 
+  + Dependents: whether the customer has dependents or not (Yes, No)
+  
+* churn-billing.csv with historical and contract data:
+
+  + customerID: internal ID
+
+  + tenure: number of months the customer has stayed with the company (number of months)
+  
+  + PhoneService: whether the customer has a phone service or not (Yes, No)
+  
+  + MultipleLines: whether the customer has multiple lines or not (Yes, No, No phone service)
+  
+  + InternetService: type of internet service subscribed (DSL, Fiber optic, No)
+  
+  + OnlineSecurity: whether the customer has online security or not (Yes, No, No internet service)
+  
+  + OnlineBackup: whether the customer has online backup or not (Yes, No, No internet service)
+  
+  + DeviceProtection: whether the customer has device protection or not (Yes, No, No internet service)
+  
+  + TechSupport: whether the customer has tech support or not (Yes, No, No internet service)
+  
+  + StreamingTV: whether the customer has streaming TV or not (Yes, No, No internet service)
+  
+  + StreamingMovies: whether the customer has streaming movies or not (Yes, No, No internet service)
+  
+  + Contract: customer contract term (Month-to-month, One year, Two year)
+  
+  + PaperlessBilling: whether the customer has paperless billing or not (Yes, No)
+  
+  + PaymentMethod: type of payment method subscribed (Electronic check, Mailed check, Bank transfer, Credit card)
+  
+  + MonthlyCharges: the amount charged to the customer monthly (amount of money)
+  
+  + TotalCharges: the total amount charged to the customer (amount of money)
+  
+  + Churn: whether the customer churned or not (Yes, No)
+  
+We need to build a machine to recognize whether a customer is going to leave the operator (Churn = Yes) or not (Churn = No).
+
+
+### Data loading and wrangling
+
+After loading all necessary libraries we are now loading data, having two different files we need to join them in one cleaned file for analytics.
+
+```{r wrangling}
+#Loading data
+urlcb <- "https://raw.githubusercontent.com/ccadei/HarvardX/main/churn-billing.csv"
+cb <- read.csv(urlcb)
+
+urlcc <- "https://raw.githubusercontent.com/ccadei/HarvardX/main/churn-customer.csv"
+cc <- read.csv(urlcc)
+
+#Checking data
+str(cb)
+
+str(cc)
+
+#Join data by customerID
+telco <- inner_join(cc, cb, by = "customerID")
+
+#Delete rows with missing data
+sum(is.na(telco))
+telco <- drop_na(telco)
+
+#Convert character columns as factors
+telco$SeniorCitizen <- as.factor(mapvalues(telco$SeniorCitizen,
+                                          from = c("0", "1"),
+                                          to = c("No", "Yes")))
+
+telco$MultipleLines <- as.factor(mapvalues(telco$MultipleLines, 
+                                          from = c("No phone service"),
+                                          to = c("No")))
+
+for(i in 10:15){
+  telco[,i] <- as.factor(mapvalues(telco[,i],
+                                  from = c("No internet service"), to = c("No")))
+}
+
+telco <- as.data.frame(unclass(telco),                  
+                       stringsAsFactors = TRUE)
+
+#Checking data
+head(telco)
+str(telco)
+```
+
+Having two files with custumerID as common variable, we (inner) join them via customerID to have a unique and complete information table. We checked for rows with missing data (NA). We also checked the type of information by row. We found 11 rows with missing data (NA); with more than 7000 rows we decide to delete rows with (NA). Some variables of services are dependent on other variables so we changed the responses from  ‘No phone service / No internet service’ to ‘No’ for these variables. We also updated character rows as factors.
+We now have a new cleaned file ready for analytics.
+
+
+### Data visualisation
+
+We can plot and examine our variables using bar charts for categorical variables and histograms for quantitative data.
+
+```{r plot}
+#Plotting variables
+#Gender plot
+p1 <- ggplot(telco, aes(x = gender)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count..-200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Senior citizen plot
+p2 <- ggplot(telco, aes(x = SeniorCitizen)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Partner plot
+p3 <- ggplot(telco, aes(x = Partner)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Dependents plot
+p4 <- ggplot(telco, aes(x = Dependents)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Plot demographic data within a grid
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+#Phone service plot
+p5 <- ggplot(telco, aes(x = PhoneService)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Multiple phone lines plot
+p6 <- ggplot(telco, aes(x = MultipleLines)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Internet service plot
+p7 <- ggplot(telco, aes(x = InternetService)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Online security service plot
+p8 <- ggplot(telco, aes(x = OnlineSecurity)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Online backup service plot
+p9 <- ggplot(telco, aes(x = OnlineBackup)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Device Protection service plot
+p10 <- ggplot(telco, aes(x = DeviceProtection)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Tech Support service plot
+p11 <- ggplot(telco, aes(x = TechSupport)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Streaming TV service plot
+p12 <- ggplot(telco, aes(x = StreamingTV)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Streaming Movies service plot
+p13 <- ggplot(telco, aes(x = StreamingMovies)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Plot service data within a grid
+grid.arrange(p5, p6, p7,p8, p9, p10,
+             p11, p12, p13, ncol = 3)
+
+#Contract status plot
+p14 <- ggplot(telco, aes(x = Contract)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Paperless billing plot
+p15 <- ggplot(telco, aes(x = PaperlessBilling)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Payment method plot
+p16 <- ggplot(telco, aes(x = PaymentMethod)) +
+  geom_bar(aes(fill = Churn)) +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Plot contract data within a grid
+grid.arrange(p14, p15, p16, ncol = 1)
+
+#Tenure histogram
+p17 <- ggplot(telco, aes(x = tenure, fill = Churn)) +
+  geom_histogram(binwidth = 1) +
+  labs(x = "Months",
+       title = "Tenure Distribtion")
+
+#Monthly charges histogram
+p18 <- ggplot(telco, aes(x = MonthlyCharges, fill = Churn)) +
+  geom_histogram(binwidth = 5) +
+  labs(x = "Dollars (binwidth = 5)",
+       title = "Monthly charges Distribtion")
+
+#Total charges histogram
+p19 <- ggplot(telco, aes(x = TotalCharges, fill = Churn)) +
+  geom_histogram(binwidth = 100) +
+  labs(x = "Dollars (binwidth = 100)",
+       title = "Total charges Distribtion")
+
+#Churn plot
+p20 <- ggplot(telco, aes(x = Churn, fill = Churn)) +
+  geom_bar() +
+  geom_text(aes(y = ..count.. -200, 
+                label = paste0(round(prop.table(..count..),4) * 100, '%')), 
+            stat = 'count', 
+            position = position_dodge(.1), 
+            size = 3)
+
+#Plot quantitative and churn data within a grid
+grid.arrange(p17, p18, p19, p20, ncol = 1)
+```
+
+From the first block of demographic bar chart plots we notice that the sample is evenly split across gender and gender seems to have no influence on churn rate.
+
+From the second block of services bar chart plots we can see two pairs of variables that seem to have the same consistence: OnlineBackup with DeviceProtection and StreamingTV with StreamingMovies.
+
+From the third block of contract bar chart plots we find out that roughly half of the sample is on month-to-month contract with a very high rate of churn, with the remaining split between one and two year contracts with low rate of churn.
+
+From the fourth block of numerical variables, the tenure variable is stacked at the tails, therefore a large proportion of customers has either had the shortest (1 month) with high rate of churn or the longest (72 months) tenure. It is possible that the beginning of the collection of our data started 72 months ago. Further investigation on the 72 month tenure would be necessary if the rate of churn were not as low as it is in that area. The TotalCharges variable is the mathematical product of tenure and monthly charges.
+
+Considering that we have to present our work to business people and that we could have much bigger database to test in the future, it seems reasonable to try and reduce the number of variables eliminating the one that, based on previous observations, are little significant. 
+
+
+### Get ready for modelling
+
+To get ready for modelling we are going to cut unnecessary variables and divide our database between train and test set.
+
+```{r split data}
+#Reduce variables and split data
+#Simplify data cutting columns
+newtelco <- telco %>% 
+  select(-customerID, -gender, -DeviceProtection, -StreamingMovies, -TotalCharges)
+  
+#Checking data
+str(newtelco)
+
+#Splitting in train and test set
+set.seed(2022, sample.kind = "Rounding")
+test_index <- createDataPartition(newtelco$Churn, times = 1, p = 0.7, list = FALSE)
+train <- newtelco[test_index,]
+test <- newtelco[-test_index,]
+
+#Checking data
+str(train)
+str(test)
+```
+
+After splitting the data set in train and test we are now ready for data analysis and prediction algorithms. We are going to apply three different methods of analysis:
+
+* Logistic regression
+* Decision tree
+* Random forests
+
+We are going to compare results using the CONFUSION MATRIX:
+
+                              PREDICTED VALUES    ACTUAL VALUES
+................... | Positive | Negative
+-------------------- ---------- ---------
+Positive                 TP        FP
+Negative                 FN        TN
+
+* True Positive (TP): number of predictions where the classifier correctly predicts the positive class as positive.
+* True Negative (TN): number of predictions where the classifier correctly predicts the negative class as negative.
+* False Positive (FP): number of predictions where the classifier incorrectly predicts the negative class as positive.
+* False Negative (FN): number of predictions where the classifier incorrectly predicts the positive class as negative.
+* Accuracy: overall accuracy of the model, meaning the fraction of the total samples that were correctly classified by the classifier. Formula: (TP+TN)/(TP+TN+FP+FN).
+* Sensitivity: fraction of all positive samples that were correctly predicted as positive by the classifier. Formula: TP/(TP+FN).
+* Specificity: fraction of all negative samples that  were correctly predicted as negative by the classifier. Formula: TN/(TN+FP).
+
+
+### Logistic regression
+
+Logistic regression is a method for fitting a regression sigmoid curve, y = f(x), when y is a categorical variable. The typical use of this model predicts y given a set of predictors x. The predictors can be continuous, categorical or a mix of both.
+In our model the categorical variable Churn is binary meaning that it can assume either the value 1 or 0 (yes or no). Our predictors are a mix of categorical (all the rest) and continuous (tenure and monthly payment) variables.
+
+```{r regression}
+#Logistic regression
+fit_glm <- glm(Churn ~., data = train, family = "binomial")
+summary(fit_glm)
+p_hat_glm <- predict(fit_glm, test)
+test_hat_glm <- factor(ifelse(p_hat_glm > 0.5, "Yes", "No"))
+confusionMatrix(test_hat_glm, test$Churn)
+```
+
+Examining the most significant p-values, we can identify the best predictors of churn based on this algorithm: tenure length, PhoneService yes, TechSupport yes, Contract one and two years yes, PaperlessBilling yes and PaymentMethodElectronic check.
+The confusion matrix returned an overall accuracy of 0.7941, a sensitivity of 0.9541 and a specificity of 0.3518.
+The machine predicted 197 customers leaving the company correctly and 363 incorrectly. 
+
+
+### Decision tree
+
+Decision tree is a technique for fitting non-linear models, it works performing binary splits on the recursive predictors mapping the possible outcomes of a series of related choices.
+In our model, the possible outcomes are Churn (yes or no) based on the client choices of different types of contract duration, payment, services, prices,etc..
+
+```{r decision}
+#Decision tree
+tr_fit <- rpart(Churn ~., data = train, method="class")
+rpart.plot(tr_fit, extra = 4)
+p_hat_tr <- predict(tr_fit, test)
+test_hat_tr <- factor(ifelse(p_hat_tr[,2] > 0.5, "Yes", "No"))
+confusionMatrix(test_hat_tr, test$Churn)
+```
+
+Examining the tree, we can identify the best predictors of churn based on this algorithm:
+Contract = one and two years yes, InternetService = DSL no, tenure longer than 4 months and PaperlessBilling = no.
+The confusion matrix returned an overall accuracy of 0.7823, a sensitivity of 0.9160 and a specificity of 0.4125.
+The machine predicted 231 customers leaving the company correctly and 329 incorrectly. 
+
+
+### Random forests
+
+Random forests are a type of ensemble method, a process in which numerous decision trees are randomly fitted and the results are combined for stronger prediction. Unfortunately, inference and explainability are limited with this algorithm. 
+
+```{r forests}
+#Random forest
+rf_fit <- randomForest(Churn ~., data = train)
+varImp(rf_fit)
+confusionMatrix(predict(rf_fit, test), test$Churn)
+```
+
+Examining the overall most important variables we can identify: tenure, MonthlyCharges, Contract, InternetService, PayementMethod.
+The confusion matrix returned an overall accuracy of 0.7984, a sensitivity of 0.9031 and a specificity of 0.5089.
+The machine predicted 285 customers leaving the company correctly and 275 incorrectly.
+
+
+### Conclusion
+
+Comparing models:
+
+Type           |Logistic reg. |Decision tree  |Random forests 
+--------------- -------------- --------------- --------------
+accuracy        0.7941         0.7823          0.7984
+sensitivity     0.9541         0.9160          0.9031
+specificity     0.3518         0.4125          0.5089
+
+After running three different models we can appreciate how the accuracy is very similar while sensitivity is better for Logistic regression, specificity is better for Random forests and the Decision tree is in the middle.
+We can advise the company that clients on month to month contract are the most likely to churn, they should try to offer better value for money in one or two year contracts to increase the number of long tenure contracts. The company may have some problems with fiber optic clients and with the ones without technical support. The company should  work to provide more technical support and a better fiber optic service. The longer a client stays with the company the less is likely to leave.
+
+
+### Further investigation
+
+We are interested to know if, by keeping all the variables in, we could improve our models and how much. Hence, we decide to repeat all the analysis and compare results.
+
+```{r all variables}
+#All variables models
+#Simplify data cutting columns
+newtelco <- telco %>% 
+  select(-customerID)
+
+#Checking data
+str(newtelco)
+
+#Splitting in train and test set
+set.seed(2022, sample.kind = "Rounding")
+test_index <- createDataPartition(newtelco$Churn, times = 1, p = 0.7, list = FALSE)
+train <- newtelco[test_index,]
+test <- newtelco[-test_index,]
+
+#Checking data
+str(train)
+str(test)
+
+#Logistic regression
+fit_glm <- glm(Churn ~., data = train, family = "binomial")
+summary(fit_glm)
+p_hat_glm <- predict(fit_glm, test)
+test_hat_glm <- factor(ifelse(p_hat_glm > 0.5, "Yes", "No"))
+confusionMatrix(test_hat_glm, test$Churn)
+
+#Decision tree
+tr_fit <- rpart(Churn ~., data = train, method="class")
+rpart.plot(tr_fit, extra = 4)
+p_hat_tr <- predict(tr_fit, test)
+test_hat_tr <- factor(ifelse(p_hat_tr[,2] > 0.5, "Yes", "No"))
+confusionMatrix(test_hat_tr, test$Churn)
+
+#Random forest
+rf_fit <- randomForest(Churn ~., data = train)
+varImp(rf_fit)
+confusionMatrix(predict(rf_fit, test), test$Churn)
+```
+
+Comparing models:
+
+Type           |Logistic reg. |Decision tree  |Random forests 
+--------------- -------------- --------------- --------------
+accuracy        0.7941         0.7823          0.7984
+sensitivity     0.9541         0.9160          0.9031
+specificity     0.3518         0.4125          0.5089
+accuracy        0.7908         0.7861          0.7984 all variables
+sensitivity     0.9528         0.8837          0.9063 all variables
+specificity     0.3429         0.5161          0.5000 all variables
+
+Including all variables has not improved our results much, it slightly improved Decision tree specificity thanks to a more complex render of the tree against less sensitivity. It would be interesting to try again reducing the number of variables, keeping only 5 to 7 of them, and see the effect. 
+
+
+### Reference
+
+* Rafael A. Irizarry - Introduction to data science
+* Andrea De Mauro    - Big data analytics
+* Jared P. Lander    - R for everyone
+
+
+
